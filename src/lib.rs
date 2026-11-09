@@ -130,24 +130,31 @@ impl Smbus {
     }
 
     fn ioctl(&self, code: u32, input: &[u8; 12]) -> Result<[u8; 8]> {
-        let mut out = [0u8; 8];
-        let mut returned = 0u32;
-        let ok = unsafe {
-            DeviceIoControl(
-                self.handle,
-                code,
-                input.as_ptr() as *mut c_void,
-                12,
-                out.as_mut_ptr() as *mut c_void,
-                8,
-                &mut returned,
-                std::ptr::null_mut(),
-            )
-        };
-        if ok == 0 {
-            return Err(Error(format!("ioctl {code:#010X} failed")));
+        let mut last = String::new();
+        // SMBus transactions occasionally fail for a single frame (the chip
+        // is busy); retrying makes writes atomic from the caller's view.
+        for attempt in 0..4 {
+            let mut out = [0u8; 8];
+            let mut returned = 0u32;
+            let ok = unsafe {
+                DeviceIoControl(
+                    self.handle,
+                    code,
+                    input.as_ptr() as *mut c_void,
+                    12,
+                    out.as_mut_ptr() as *mut c_void,
+                    8,
+                    &mut returned,
+                    std::ptr::null_mut(),
+                )
+            };
+            if ok != 0 {
+                return Ok(out);
+            }
+            last = format!("ioctl {code:#010X} failed (attempt {})", attempt + 1);
+            std::thread::sleep(std::time::Duration::from_millis(1));
         }
-        Ok(out)
+        Err(Error(last))
     }
 
     fn request(bus: u8, addr: u8, cmd: u8) -> [u8; 12] {
@@ -178,17 +185,29 @@ impl Smbus {
 
     /// Point the ENE register window at `reg`.
     pub fn set_register(&self, addr: u8, reg: u16) -> Result<()> {
-        self.write_word(addr, 0x00, reg)
+        self.write_word(addr, 0x00, reg)?;
+        // The controller needs a moment before it accepts the follow-up
+        // access; without this the register pointer occasionally desyncs.
+        std::thread::sleep(std::time::Duration::from_micros(150));
+        Ok(())
     }
 
     pub fn register_read(&self, addr: u8, reg: u16) -> Result<u8> {
         self.set_register(addr, reg)?;
-        self.read_byte(addr, 0x81)
+        match self.read_byte(addr, 0x81) {
+            Ok(v) => Ok(v),
+            Err(_) => {
+                self.set_register(addr, reg)?;
+                self.read_byte(addr, 0x81)
+            }
+        }
     }
 
     pub fn register_write(&self, addr: u8, reg: u16, value: u8) -> Result<()> {
         self.set_register(addr, reg)?;
-        self.write_byte(addr, 0x01, value)
+        self.write_byte(addr, 0x01, value)?;
+        std::thread::sleep(std::time::Duration::from_micros(150));
+        Ok(())
     }
 }
 
@@ -255,6 +274,7 @@ impl Smbus {
             self.write_byte(dim.address, 0x01, colour.b)?;
             self.write_byte(dim.address, 0x01, colour.g)?;
         }
+        std::thread::sleep(std::time::Duration::from_millis(2));
 
         self.register_write(dim.address, 0x8021, 0x01)?; // static
         self.register_write(dim.address, 0x8022, 0x02)?; // normal speed
@@ -279,5 +299,66 @@ impl Smbus {
             out.push(self.read_byte(dim.address, 0x81)?);
         }
         Ok(out)
+    }
+}
+
+// ---------------------------------------------------------------- config
+
+fn config_path() -> std::path::PathBuf {
+    let base = std::env::var("APPDATA").unwrap_or_else(|_| ".".into());
+    std::path::Path::new(&base).join("lancer-rgb").join("last.txt")
+}
+
+/// Last colour chosen by the user, plus brightness percentage.
+pub fn load_saved() -> (Rgb, u8) {
+    std::fs::read_to_string(config_path())
+        .ok()
+        .and_then(|s| {
+            let v: Vec<u8> = s.split_whitespace().filter_map(|x| x.parse().ok()).collect();
+            (v.len() >= 3).then(|| {
+                (Rgb::new(v[0], v[1], v[2]), if v.len() > 3 { v[3].clamp(5, 100) } else { 100 })
+            })
+        })
+        .unwrap_or((Rgb::new(160, 60, 255), 70))
+}
+
+pub fn save_saved(c: Rgb, bright: u8) {
+    let p = config_path();
+    let _ = std::fs::create_dir_all(p.parent().unwrap());
+    let _ = std::fs::write(&p, format!("{} {} {} {}", c.r, c.g, c.b, bright));
+}
+
+/// Apply a colour to every detected module. Returns (applied, total).
+pub fn apply_all(c: Rgb, save: bool) -> Result<(usize, usize)> {
+    let bus = Smbus::open()?;
+    let dims = detect(&bus);
+    let mut ok = 0;
+    for d in &dims {
+        if bus.set_solid(d, c).is_ok() {
+            if save {
+                let _ = bus.save(d);
+            }
+            ok += 1;
+        }
+    }
+    Ok((ok, dims.len()))
+}
+
+/// One-shot restore used by the logon entry (`lancer-apply.exe`).
+pub fn apply_saved() {
+    let (c, bright) = load_saved();
+    let s = bright.clamp(5, 100) as u32;
+    let c = Rgb::new(
+        (c.r as u32 * s / 100) as u8,
+        (c.g as u32 * s / 100) as u8,
+        (c.b as u32 * s / 100) as u8,
+    );
+    // At logon the modules may not answer for a moment.
+    for _ in 0..20 {
+        if let Ok((0, _)) | Err(_) = apply_all(c, true) {
+            std::thread::sleep(std::time::Duration::from_millis(500));
+        } else {
+            return;
+        }
     }
 }

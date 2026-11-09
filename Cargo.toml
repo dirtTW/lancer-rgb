@@ -1,6 +1,6 @@
 [package]
 name = "lancer-rgb"
-version = "0.1.0"
+version = "0.2.0"
 edition = "2021"
 description = "Standalone RGB control for XPG Lancer Blade DDR5 (ENE SMBus), no login, no Electron"
 license = "GPL-2.0-or-later"
@@ -15,8 +15,18 @@ name = "lancer"
 path = "src/bin/app.rs"
 
 [[bin]]
-name = "lancer-probe"
-path = "src/bin/probe.rs"
+name = "lancer-apply"
+path = "src/bin/apply.rs"
 
 [dependencies]
-slint = { version = "1", features = ["renderer-software"] }
+gpui = { package = "gpui-pre", version = "0.3" }
+gpui_platform = { package = "gpui-pre-platform", version = "0.3" }
+
+# Smallest possible binaries: single codegen unit, LTO, symbols stripped,
+# abort on panic (no unwinding tables).
+[profile.release]
+opt-level = "z"
+lto = true
+codegen-units = 1
+panic = "abort"
+strip = true
