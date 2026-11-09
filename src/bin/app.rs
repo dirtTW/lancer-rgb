@@ -95,6 +95,7 @@ extern "system" {
     fn GetWindowLongPtrW(h: Hwnd, idx: i32) -> isize;
     fn LoadCursorW(inst: *mut c_void, name: *const u16) -> *mut c_void;
     fn SetProcessDPIAware() -> i32;
+    fn SetProcessDpiAwarenessContext(v: isize) -> i32;
     fn AdjustWindowRectEx(r: *mut Rect, style: u32, menu: i32, ex: u32) -> i32;
 }
 
@@ -128,9 +129,13 @@ extern "system" {
     fn DrawTextW(dc: Hdc, s: *const u16, len: i32, r: *mut Rect, fmt: u32) -> i32;
     fn GetDC(h: Hwnd) -> Hdc;
     fn ReleaseDC(h: Hwnd, dc: Hdc) -> i32;
+    fn GetCursorPos(p: *mut Point) -> i32;
+    fn ScreenToClient(h: Hwnd, p: *mut Point) -> i32;
+    fn GetDpiForWindow(h: Hwnd) -> u32;
 }
 
 const WM_DESTROY: u32 = 0x0002;
+const WM_SIZE: u32 = 0x0005;
 const WM_PAINT: u32 = 0x000F;
 const WM_ERASEBKGND: u32 = 0x0014;
 const WM_MOUSEMOVE: u32 = 0x0200;
@@ -373,6 +378,19 @@ unsafe fn app_ptr(hwnd: Hwnd) -> *mut App {
     GetWindowLongPtrW(hwnd, GWLP_USERDATA) as *mut App
 }
 
+/// Mouse position in the same coordinate space as `GetClientRect`.
+/// `lParam` is unreliable here: Windows scales it for DPI-virtualised windows,
+/// which breaks hit-testing against the client-sized layout.
+unsafe fn cursor_client(hwnd: Hwnd) -> (i32, i32) {
+    let mut p = Point { x: 0, y: 0 };
+    GetCursorPos(&mut p);
+    ScreenToClient(hwnd, &mut p);
+    // Windows reports the cursor in physical pixels while GetClientRect /
+    // our layout are in DIPs, so normalise to the layout space.
+    let dpi = GetDpiForWindow(hwnd).max(96) as i32;
+    (p.x * 96 / dpi, p.y * 96 / dpi)
+}
+
 extern "system" fn wnd_proc(hwnd: Hwnd, msg: u32, wparam: usize, lparam: isize) -> isize {
     unsafe {
         match msg {
@@ -388,10 +406,18 @@ extern "system" fn wnd_proc(hwnd: Hwnd, msg: u32, wparam: usize, lparam: isize) 
                 0
             }
             WM_ERASEBKGND => 1,
+            WM_SIZE => {
+                let app = app_ptr(hwnd);
+                if !app.is_null() {
+                    let w = (lparam & 0xFFFF) as i32;
+                    (*app).layout(w.max(360));
+                    InvalidateRect(hwnd, null(), 0);
+                }
+                0
+            }
             WM_LBUTTONDOWN => {
                 let app = &mut *app_ptr(hwnd);
-                let x = (lparam & 0xFFFF) as i16 as i32;
-                let y = ((lparam >> 16) & 0xFFFF) as i16 as i32;
+                let (x, y) = cursor_client(hwnd);
                 for i in 0..7 {
                     if App::hit(&app.presets[i], x, y) {
                         let (r, g, b) = PRESETS[i];
@@ -421,7 +447,7 @@ extern "system" fn wnd_proc(hwnd: Hwnd, msg: u32, wparam: usize, lparam: isize) 
             WM_MOUSEMOVE => {
                 let app = &mut *app_ptr(hwnd);
                 if let Some(i) = app.drag {
-                    let x = (lparam & 0xFFFF) as i16 as i32;
+                    let (x, _) = cursor_client(hwnd);
                     app.set_from(i, x);
                     InvalidateRect(hwnd, null(), 0);
                 }
@@ -448,7 +474,8 @@ fn main() {
     }
 
     unsafe {
-        SetProcessDPIAware();
+        SetProcessDpiAwarenessContext(-4);
+        let _ = SetProcessDPIAware();
 
         let (c, bright) = load_saved();
         let mut devices = Vec::new();
@@ -486,8 +513,6 @@ fn main() {
             apply_save: Rect { left: 0, top: 0, right: 0, bottom: 0 },
             check: Rect { left: 0, top: 0, right: 0, bottom: 0 },
         }));
-        (*app).layout(520);
-
         let class = wide("LancerRgbWindow");
         let wc = WndClassW {
             style: 0,
@@ -504,7 +529,7 @@ fn main() {
         RegisterClassW(&wc);
 
         let style = 0x00CF_0000u32 & !0x0004_0000 & !0x0001_0000;
-        let mut frame = Rect { left: 0, top: 0, right: 520, bottom: 520 };
+        let mut frame = Rect { left: 0, top: 0, right: 700, bottom: 680 };
         AdjustWindowRectEx(&mut frame, style, 0, 0);
 
         let title = wide("Lancer RGB");
@@ -523,6 +548,11 @@ fn main() {
             null_mut(),
         );
         SetWindowLongPtrW(hwnd, GWLP_USERDATA, app as isize);
+
+        let mut client = Rect { left: 0, top: 0, right: 0, bottom: 0 };
+        GetClientRect(hwnd, &mut client);
+        (*app).layout(client.right.max(360));
+
         ShowWindow(hwnd, 1);
         UpdateWindow(hwnd);
 
