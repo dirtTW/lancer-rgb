@@ -3,6 +3,8 @@ name = "lancer-rgb"
 version = "0.1.0"
 edition = "2021"
 description = "Standalone RGB control for XPG Lancer Blade DDR5 (ENE SMBus), no login, no Electron"
+license = "GPL-2.0-or-later"
+repository = "https://github.com/dirtTW/lancer-rgb"
 
 [lib]
 name = "lancer"
@@ -17,4 +19,4 @@ name = "lancer-probe"
 path = "src/bin/probe.rs"
 
 [dependencies]
-slint = "1"
+slint = { version = "1", features = ["renderer-software"] }

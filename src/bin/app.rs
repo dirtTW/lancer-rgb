@@ -1,3 +1,5 @@
+#![windows_subsystem = "windows"]
+
 use lancer::{detect, Dim, Rgb, Smbus};
 use slint::{ModelRc, SharedString, VecModel};
 use std::rc::Rc;
@@ -157,6 +159,10 @@ fn apply_last() {
 }
 
 fn main() -> Result<(), slint::PlatformError> {
+    // Use Slint's CPU renderer: this window is tiny, and it avoids the
+    // partial-repaint/black-window glitches seen with OpenGL on some drivers.
+    std::env::set_var("SLINT_BACKEND", "winit-software");
+
     if std::env::args().any(|a| a == "--apply-last") {
         apply_last();
         return Ok(());
