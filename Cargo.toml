@@ -1,0 +1,20 @@
+[package]
+name = "lancer-rgb"
+version = "0.1.0"
+edition = "2021"
+description = "Standalone RGB control for XPG Lancer Blade DDR5 (ENE SMBus), no login, no Electron"
+
+[lib]
+name = "lancer"
+path = "src/lib.rs"
+
+[[bin]]
+name = "lancer"
+path = "src/bin/app.rs"
+
+[[bin]]
+name = "lancer-probe"
+path = "src/bin/probe.rs"
+
+[dependencies]
+slint = "1"
