@@ -1,5 +1,30 @@
 # Lancer RGB
 
+> ## ⚠️ USE AT YOUR OWN RISK — THIS CAN KILL YOUR RAM's LEDs
+>
+> This is unofficial, reverse-engineered software. It writes directly to the
+> RGB controller on the memory modules over the motherboard SMBus, using
+> undocumented registers.
+>
+> **During development of this project, the LEDs on the author's own two XPG
+> Lancer Blade DDR5 sticks stopped working and never came back.** XPG Prime
+> could no longer light them either. A full PSU power cut (standby removed),
+> cold boot and reseating did not restore them. The exact cause was never
+> confirmed — but it happened while this code was being written against the
+> modules, and you should assume the risk is real.
+>
+> What that means for you:
+>
+> - Writing RGB registers is **not** guaranteed safe on your modules.
+> - A failed write, a latched controller or a corrupted saved profile may
+>   leave your sticks permanently dark.
+> - **No warranty. No liability. No support for damaged hardware.**
+> - If the RGB on your RAM matters to you, or the kit is expensive and hard
+>   to replace, **do not run this.**
+>
+> The author is not RMA-ing and is not claiming the software is the proven
+> cause — only that you accept this risk yourself if you use it.
+
 Minimal native Windows controller for **XPG Lancer Blade DDR5** RGB.
 No ADATA account, no Electron, no background app.
 
@@ -62,6 +87,12 @@ read/write command `0x01`; the pointer auto-increments. IOCTLs:
   desync.
 - Hardware Save (`0x80A0 = 0xAA`) only kept the first colour on the tested kit,
   so it is issued but not relied on.
+- Near-black colours are applied live but **never saved**, so a black profile
+  cannot be persisted to the module.
+- **Observed failure:** on the development kit the LEDs stopped lighting
+  entirely and did not recover after a PSU power cut, cold boot or reseat.
+  XPG Prime also failed to light them. Cause unconfirmed. See the warning at the
+  top of this file.
 
 ## Persistence
 
@@ -103,3 +134,9 @@ XPG, ADATA and Lancer are trademarks of their owners. Unofficial project.
 ## License
 
 GPL-2.0-or-later. See `LICENSE`.
+
+This program is distributed in the hope that it will be useful, but **WITHOUT
+ANY WARRANTY**; without even the implied warranty of MERCHANTABILITY or FITNESS
+FOR A PARTICULAR PURPOSE. The authors accept no liability for damaged memory,
+lost data or hardware that stops working. See the warning at the top of this
+file and sections 15–16 of the GPL.
