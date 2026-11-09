@@ -345,8 +345,7 @@ pub fn apply_all(c: Rgb, save: bool) -> Result<(usize, usize)> {
 }
 
 /// One-shot restore used by the logon entry (`lancer-apply.exe`).
-pub fn apply_saved() {
-    let (c, bright) = load_saved();
+pub fn apply_saved() {    let (c, bright) = load_saved();
     let s = bright.clamp(5, 100) as u32;
     let c = Rgb::new(
         (c.r as u32 * s / 100) as u8,
@@ -361,4 +360,33 @@ pub fn apply_saved() {
             return;
         }
     }
+}
+
+// ------------------------------------------------------------ autostart
+
+pub const RUN_KEY: &str = r"HKCU\Software\Microsoft\Windows\CurrentVersion\Run";
+pub const RUN_NAME: &str = "LancerRGB";
+
+pub fn startup_enabled() -> bool {
+    std::process::Command::new("reg")
+        .args(["query", RUN_KEY, "/v", RUN_NAME])
+        .output()
+        .map(|o| o.status.success())
+        .unwrap_or(false)
+}
+
+/// Point the Run key at the tiny restorer next to the GUI.
+pub fn set_startup(enabled: bool) {
+    let mut cmd = std::process::Command::new("reg");
+    if enabled {
+        let exe = std::env::current_exe().unwrap_or_default();
+        let dir = exe.parent().map(|p| p.to_path_buf()).unwrap_or_default();
+        let apply = dir.join("lancer-apply.exe");
+        let target = if apply.exists() { apply } else { exe };
+        let value = format!("\"{}\"", target.display());
+        cmd.args(["add", RUN_KEY, "/v", RUN_NAME, "/t", "REG_SZ", "/d", &value, "/f"]);
+    } else {
+        cmd.args(["delete", RUN_KEY, "/v", RUN_NAME, "/f"]);
+    }
+    let _ = cmd.output();
 }

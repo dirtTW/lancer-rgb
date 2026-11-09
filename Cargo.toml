@@ -19,8 +19,6 @@ name = "lancer-apply"
 path = "src/bin/apply.rs"
 
 [dependencies]
-gpui = { package = "gpui-pre", version = "0.3" }
-gpui_platform = { package = "gpui-pre-platform", version = "0.3" }
 
 # Smallest possible binaries: single codegen unit, LTO, symbols stripped,
 # abort on panic (no unwinding tables).
