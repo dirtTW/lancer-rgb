@@ -92,6 +92,7 @@ extern "system" {
     fn InvalidateRect(h: Hwnd, r: *const Rect, erase: i32) -> i32;
     fn GetClientRect(h: Hwnd, r: *mut Rect) -> i32;
     fn SetWindowLongPtrW(h: Hwnd, idx: i32, val: isize) -> isize;
+    fn SetForegroundWindow(h: Hwnd) -> i32;
     fn GetWindowLongPtrW(h: Hwnd, idx: i32) -> isize;
     fn LoadCursorW(inst: *mut c_void, name: *const u16) -> *mut c_void;
     fn SetProcessDPIAware() -> i32;
@@ -409,8 +410,11 @@ extern "system" fn wnd_proc(hwnd: Hwnd, msg: u32, wparam: usize, lparam: isize) 
             WM_SIZE => {
                 let app = app_ptr(hwnd);
                 if !app.is_null() {
-                    let w = (lparam & 0xFFFF) as i32;
-                    (*app).layout(w.max(360));
+                    // lParam is in physical pixels under DPI virtualisation;
+                    // GetClientRect matches the space we draw in.
+                    let mut cr = Rect { left: 0, top: 0, right: 0, bottom: 0 };
+                    GetClientRect(hwnd, &mut cr);
+                    (*app).layout(cr.right.max(360));
                     InvalidateRect(hwnd, null(), 0);
                 }
                 0
@@ -554,6 +558,7 @@ fn main() {
         (*app).layout(client.right.max(360));
 
         ShowWindow(hwnd, 1);
+        SetForegroundWindow(hwnd);
         UpdateWindow(hwnd);
 
         let mut msg = std::mem::zeroed::<Msg>();
