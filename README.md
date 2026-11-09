@@ -7,10 +7,12 @@ Set a colour once; a 126 KB helper restores it at logon and exits.
 
 | Binary | Size | Purpose |
 | --- | --- | --- |
-| `lancer.exe` | 234 KB | raw Win32/GDI window: colour picker, apply/save |
+| `lancer.exe` | 4.7 MB | GPUI window: colour picker, apply/save |
 | `lancer-apply.exe` | 126 KB | one-shot restore used by the logon entry |
 
-No UI framework: the window is user32 + gdi32, linked straight from Rust.
+The GUI deliberately uses GPUI rather than a hand-rolled Win32 window: GPUI
+handles DPI scaling and input correctly on this machine, which a raw
+win32/GDI implementation did not.
 
 ## Hardware
 
@@ -81,10 +83,9 @@ Release profile is tuned for size: `opt-level = "z"`, fat LTO, one codegen unit,
 
 ```
 src/lib.rs            engine (transport, protocol, config, one-shot restore)
-src/bin/app.rs        Win32/GDI window
+src/bin/app.rs        GPUI window
 src/bin/apply.rs      tiny logon restorer
 examples/probe.rs     headless diagnostic: cargo run --example probe -- A03CFF
-build.rs              links user32 + gdi32
 ```
 
 ## Credits
@@ -93,7 +94,7 @@ Protocol knowledge derived from **[OpenRGB](https://openrgb.org)** by Adam Honse
 (CalcProgrammer1), ENE SMBus controller (`Controllers/ENESMBusController`,
 GPL-2.0-or-later).
 
-- **Win32/GDI** - the entire UI is user32 + gdi32 called from Rust; no toolkit.
+- **GPUI / gpui-pre** - Rust UI framework; handles DPI and input.
 - **ENE Technology** - authors of the `CtiIo`/`AacHal`/`MsIo` components the
   vendor pack installs; none of their binaries are included here.
 
