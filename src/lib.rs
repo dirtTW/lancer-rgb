@@ -329,13 +329,18 @@ pub fn save_saved(c: Rgb, bright: u8) {
 }
 
 /// Apply a colour to every detected module. Returns (applied, total).
+///
+/// Near-black colours are applied live but never written to the module's
+/// flash: a saved black profile would make the sticks boot dark, which is
+/// indistinguishable from a dead LED rail.
 pub fn apply_all(c: Rgb, save: bool) -> Result<(usize, usize)> {
     let bus = Smbus::open()?;
     let dims = detect(&bus);
+    let safe_to_save = c.r.max(c.g).max(c.b) >= 16;
     let mut ok = 0;
     for d in &dims {
         if bus.set_solid(d, c).is_ok() {
-            if save {
+            if save && safe_to_save {
                 let _ = bus.save(d);
             }
             ok += 1;
