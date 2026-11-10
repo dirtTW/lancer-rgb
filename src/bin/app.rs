@@ -7,7 +7,7 @@
 //! be converted to values.
 
 use gpui::*;
-use lancer::{apply_all, detect, load_saved, save_saved, Rgb, Smbus};
+use lancer::{apply_all, detect, load_saved, save_saved, set_startup, startup_enabled, Rgb, Smbus};
 use std::cell::Cell;
 use std::rc::Rc;
 
@@ -22,33 +22,9 @@ fn hex(r: u8, g: u8, b: u8) -> u32 {
     ((r as u32) << 16) | ((g as u32) << 8) | (b as u32)
 }
 
-const RUN_KEY: &str = r"HKCU\Software\Microsoft\Windows\CurrentVersion\Run";
-const RUN_NAME: &str = "LancerRGB";
-
-fn startup_enabled() -> bool {
-    std::process::Command::new("reg")
-        .args(["query", RUN_KEY, "/v", RUN_NAME])
-        .output()
-        .map(|o| o.status.success())
-        .unwrap_or(false)
-}
-
-fn set_startup(enabled: bool) {
-    let mut cmd = std::process::Command::new("reg");
-    if enabled {
-        let exe = std::env::current_exe().unwrap_or_default();
-        let value = format!("\"{}\" --apply-last", exe.display());
-        cmd.args(["add", RUN_KEY, "/v", RUN_NAME, "/t", "REG_SZ", "/d", &value, "/f"]);
-    } else {
-        cmd.args(["delete", RUN_KEY, "/v", RUN_NAME, "/f"]);
-    }
-    let _ = cmd.output();
-}
-
 #[derive(Clone)]
 struct Track {
     bounds: Rc<Cell<Bounds<Pixels>>>,
-    dragging: Rc<Cell<bool>>,
 }
 
 impl Track {
@@ -58,7 +34,6 @@ impl Track {
                 origin: point(px(0.), px(0.)),
                 size: size(px(1.), px(1.)),
             })),
-            dragging: Rc::new(Cell::new(false)),
         }
     }
 }
@@ -71,17 +46,13 @@ struct Root {
     status: SharedString,
     devices: Vec<SharedString>,
     enabled: bool,
+    drag: Option<usize>,
     tracks: [Track; 4],
 }
 
 impl Root {
     fn colour(&self) -> Rgb {
-        let s = self.bright.clamp(5, 100) as u32;
-        Rgb::new(
-            (self.r as u32 * s / 100) as u8,
-            (self.g as u32 * s / 100) as u8,
-            (self.b as u32 * s / 100) as u8,
-        )
+        Rgb::new(self.r, self.g, self.b).scaled(self.bright)
     }
 
     fn set_from_x(&mut self, idx: usize, x: Pixels) {
@@ -99,17 +70,18 @@ impl Root {
     fn apply(&mut self, save: bool) {
         let c = self.colour();
         self.status = match apply_all(c, save) {
-            Ok((ok, total)) => {
+            Ok(a) => {
                 save_saved(Rgb::new(self.r, self.g, self.b), self.bright);
+                let tail = if a.saved {
+                    " - saved"
+                } else if save {
+                    " - not saved (too dark)"
+                } else {
+                    ""
+                };
                 format!(
                     "applied #{:02X}{:02X}{:02X} at {}% to {}/{} module(s){}",
-                    c.r,
-                    c.g,
-                    c.b,
-                    self.bright,
-                    ok,
-                    total,
-                    if save { " - saved" } else { "" },
+                    c.r, c.g, c.b, self.bright, a.ok, a.total, tail
                 )
                 .into()
             }
@@ -135,7 +107,6 @@ impl Render for Root {
         {
             let t = self.tracks[idx].clone();
             let tb = t.bounds.clone();
-            let td = t.dragging.clone();
             let ratio = if idx == 3 {
                 (value as f32 - 5.0) / 95.0
             } else {
@@ -189,23 +160,9 @@ impl Render for Root {
                         .on_mouse_down(
                             MouseButton::Left,
                             cx.listener(move |this: &mut Root, ev: &MouseDownEvent, _w, cx| {
-                                td.set(true);
+                                this.drag = Some(idx);
                                 this.set_from_x(idx, ev.position.x);
                                 cx.notify();
-                            }),
-                        )
-                        .on_mouse_move(cx.listener(
-                            move |this: &mut Root, ev: &MouseMoveEvent, _w, cx| {
-                                if this.tracks[idx].dragging.get() {
-                                    this.set_from_x(idx, ev.position.x);
-                                    cx.notify();
-                                }
-                            },
-                        ))
-                        .on_mouse_up(
-                            MouseButton::Left,
-                            cx.listener(move |this: &mut Root, _ev, _w, _cx| {
-                                this.tracks[idx].dragging.set(false);
                             }),
                         ),
                 )
@@ -260,6 +217,18 @@ impl Render for Root {
             .p(px(18.))
             .gap(px(10.))
             .text_color(rgb(TEXT))
+            .on_mouse_move(cx.listener(|this: &mut Root, ev: &MouseMoveEvent, _w, cx| {
+                if let Some(i) = this.drag {
+                    this.set_from_x(i, ev.position.x);
+                    cx.notify();
+                }
+            }))
+            .on_mouse_up(
+                MouseButton::Left,
+                cx.listener(|this: &mut Root, _ev, _w, _cx| {
+                    this.drag = None;
+                }),
+            )
             .child(
                 div()
                     .text_size(px(20.))
@@ -429,6 +398,7 @@ fn main() {
             status,
             devices,
             enabled,
+            drag: None,
             tracks: [Track::new(), Track::new(), Track::new(), Track::new()],
         };
 
@@ -436,18 +406,24 @@ fn main() {
             origin: point(px(240.), px(160.)),
             size: size(px(540.), px(660.)),
         };
-        cx.open_window(
-            WindowOptions {
-                window_bounds: Some(WindowBounds::Windowed(bounds)),
-                titlebar: Some(TitlebarOptions {
-                    title: Some("Lancer RGB".into()),
+        let handle = cx
+            .open_window(
+                WindowOptions {
+                    window_bounds: Some(WindowBounds::Windowed(bounds)),
+                    titlebar: Some(TitlebarOptions {
+                        title: Some("Lancer RGB".into()),
+                        ..Default::default()
+                    }),
                     ..Default::default()
-                }),
-                ..Default::default()
-            },
-            move |_window, cx| cx.new(|_| root),
-        )
-        .expect("failed to open window");
+                },
+                move |_window, cx| cx.new(|_| root),
+            )
+            .expect("failed to open window");
+        // Without this the window can open behind the editor/browser and
+        // clicks appear to do nothing.
+        handle
+            .update(cx, |_, window, _| window.activate_window())
+            .ok();
         cx.activate(true);
     });
 }

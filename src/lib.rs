@@ -91,6 +91,21 @@ impl Rgb {
     pub const fn new(r: u8, g: u8, b: u8) -> Self {
         Self { r, g, b }
     }
+
+    /// Scale by a brightness percentage (clamped to 5..=100).
+    pub fn scaled(self, pct: u8) -> Self {
+        let s = pct.clamp(5, 100) as u32;
+        Self {
+            r: (self.r as u32 * s / 100) as u8,
+            g: (self.g as u32 * s / 100) as u8,
+            b: (self.b as u32 * s / 100) as u8,
+        }
+    }
+
+    /// `false` for effectively black colours, which must never be persisted.
+    pub fn savable(self) -> bool {
+        self.r.max(self.g).max(self.b) >= 16
+    }
 }
 
 /// A detected DIMM.
@@ -328,41 +343,44 @@ pub fn save_saved(c: Rgb, bright: u8) {
     let _ = std::fs::write(&p, format!("{} {} {} {}", c.r, c.g, c.b, bright));
 }
 
-/// Apply a colour to every detected module. Returns (applied, total).
+/// Result of pushing a colour to every module.
+pub struct Applied {
+    pub ok: usize,
+    pub total: usize,
+    /// Whether the colour was also written into at least one module's flash.
+    pub saved: bool,
+}
+
+/// Apply a colour to every detected module.
 ///
 /// Near-black colours are applied live but never written to the module's
 /// flash: a saved black profile would make the sticks boot dark, which is
 /// indistinguishable from a dead LED rail.
-pub fn apply_all(c: Rgb, save: bool) -> Result<(usize, usize)> {
+pub fn apply_all(c: Rgb, save: bool) -> Result<Applied> {
     let bus = Smbus::open()?;
     let dims = detect(&bus);
-    let safe_to_save = c.r.max(c.g).max(c.b) >= 16;
     let mut ok = 0;
+    let mut saved = false;
     for d in &dims {
         if bus.set_solid(d, c).is_ok() {
-            if save && safe_to_save {
-                let _ = bus.save(d);
+            if save && c.savable() && bus.save(d).is_ok() {
+                saved = true;
             }
             ok += 1;
         }
     }
-    Ok((ok, dims.len()))
+    Ok(Applied { ok, total: dims.len(), saved })
 }
 
 /// One-shot restore used by the logon entry (`lancer-apply.exe`).
-pub fn apply_saved() {    let (c, bright) = load_saved();
-    let s = bright.clamp(5, 100) as u32;
-    let c = Rgb::new(
-        (c.r as u32 * s / 100) as u8,
-        (c.g as u32 * s / 100) as u8,
-        (c.b as u32 * s / 100) as u8,
-    );
+pub fn apply_saved() {
+    let (c, bright) = load_saved();
+    let c = c.scaled(bright);
     // At logon the modules may not answer for a moment.
     for _ in 0..20 {
-        if let Ok((0, _)) | Err(_) = apply_all(c, true) {
-            std::thread::sleep(std::time::Duration::from_millis(500));
-        } else {
-            return;
+        match apply_all(c, true) {
+            Ok(a) if a.ok > 0 => return,
+            _ => std::thread::sleep(std::time::Duration::from_millis(500)),
         }
     }
 }
@@ -394,4 +412,34 @@ pub fn set_startup(enabled: bool) {
         cmd.args(["delete", RUN_KEY, "/v", RUN_NAME, "/f"]);
     }
     let _ = cmd.output();
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn known_profiles_use_the_right_colour_registers() {
+        let v2 = profile_for("AUDA0-E6K5-0101").expect("v2 profile");
+        assert_eq!(v2.colour_reg, 0x8160);
+        let v1 = profile_for("DIMM_LED-0102").expect("v1 profile");
+        assert_eq!(v1.colour_reg, 0x8010);
+        assert!(profile_for("not-ene").is_none());
+    }
+
+    #[test]
+    fn brightness_scales_every_channel() {
+        let c = Rgb::new(200, 100, 50);
+        assert_eq!(c.scaled(100), c);
+        assert_eq!(c.scaled(50), Rgb::new(100, 50, 25));
+        // brightness has a 5% floor
+        assert_eq!(Rgb::new(100, 0, 0).scaled(0), Rgb::new(5, 0, 0));
+    }
+
+    #[test]
+    fn black_profiles_are_never_saved() {
+        assert!(!Rgb::new(0, 0, 0).savable());
+        assert!(!Rgb::new(15, 15, 15).savable());
+        assert!(Rgb::new(16, 0, 0).savable());
+    }
 }
